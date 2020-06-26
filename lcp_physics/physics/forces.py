@@ -65,3 +65,23 @@ class Gravity(ExternalForce):
         super().set_body(body)
         down_tensor = ExternalForce.DOWN.type_as(body._base_tensor).to(body._base_tensor)
         self.cached_force = down_tensor * self.body.mass * self.multiplier
+
+class MDP(ExternalForce):
+    """Gravity force object, constantly returns a downwards pointing force of
+       magnitude body.mass * g.
+    """
+
+    def __init__(self, g=10.0):
+        self.multiplier = g
+        self.body = None
+        self.cached_force = None
+
+    def force(self, t):
+        return self.cached_force
+
+    def set_body(self, body):
+        super().set_body(body)
+        vel = body.v
+        agains_vel_tensor = get_tensor(vel).type_as(body._base_tensor).to(body._base_tensor)
+        print(agains_vel_tensor)
+        self.cached_force = agains_vel_tensor * self.body.mass * self.multiplier

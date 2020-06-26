@@ -20,7 +20,6 @@ class Body(object):
                  col=(255, 0, 0), thickness=1):
         # get base tensor to define dtype, device and layout for others
         self._set_base_tensor(locals().values())
-
         self.eps = get_tensor(eps, base_tensor=self._base_tensor)
         # rotation & position vectors
         pos = get_tensor(pos, base_tensor=self._base_tensor)
@@ -79,6 +78,7 @@ class Body(object):
 
     def move(self, dt, update_geom_rotation=True):
         new_p = self.p + self.v * dt
+        # print(self.v)
         self.set_p(new_p, update_geom_rotation)
 
     def set_p(self, new_p, update_geom_rotation=True):
@@ -116,7 +116,8 @@ class Body(object):
 class Circle(Body):
     def __init__(self, pos, rad, vel=(0, 0, 0), mass=1, restitution=Defaults.RESTITUTION,
                  fric_coeff=Defaults.FRIC_COEFF, eps=Defaults.EPSILON,
-                 col=(255, 0, 0), thickness=1):
+                 col=(255, 0, 0), thickness=1, name = None, traj = None):
+        self.name = name
         self._set_base_tensor(locals().values())
         self.rad = get_tensor(rad, base_tensor=self._base_tensor)
         super().__init__(pos, vel=vel, mass=mass, restitution=restitution,
@@ -139,7 +140,7 @@ class Circle(Body):
 
     def draw(self, screen, pixels_per_meter=1):
         center = (self.pos.detach().numpy() * pixels_per_meter).astype(int)
-        rad = int(self.rad.item() * pixels_per_meter)
+        rad = int(10 * pixels_per_meter)
         # draw radius to visualize orientation
         r = pygame.draw.line(screen, (0, 0, 255), center,
                              center + [math.cos(self.rot.item()) * rad,
@@ -161,7 +162,8 @@ class Hull(Body):
     """
     def __init__(self, ref_point, vertices, vel=(0, 0, 0), mass=1, restitution=Defaults.RESTITUTION,
                  fric_coeff=Defaults.FRIC_COEFF, eps=Defaults.EPSILON,
-                 col=(255, 0, 0), thickness=1):
+                 col=(255, 0, 0), thickness=1, name = None, traj = None):
+        self.name = name
         self._set_base_tensor(locals().values())
         ref_point = get_tensor(ref_point, base_tensor=self._base_tensor)
         # center vertices around centroid
@@ -253,7 +255,8 @@ class Hull(Body):
 class Rect(Hull):
     def __init__(self, pos, dims, vel=(0, 0, 0), mass=1, restitution=Defaults.RESTITUTION,
                  fric_coeff=Defaults.FRIC_COEFF, eps=Defaults.EPSILON,
-                 col=(255, 0, 0), thickness=1):
+                 col=(255, 0, 0), thickness=1, name=None, traj = None):
+        self.name = name
         self._set_base_tensor(locals().values())
         self.dims = get_tensor(dims, base_tensor=self._base_tensor)
         pos = get_tensor(pos, base_tensor=self._base_tensor)

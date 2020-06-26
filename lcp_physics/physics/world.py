@@ -3,15 +3,23 @@ from functools import lru_cache
 
 import ode
 import torch
+import pdb
 
 from . import engines as engines_module
 from . import contacts as contacts_module
 from .utils import Indices, Defaults, cross_2d, get_instance, left_orthogonal
-
+import numpy as np
 
 X, Y = Indices.X, Indices.Y
 DIM = Defaults.DIM
 
+class Trajectory(object):
+    """Fingers velocity trajectory"""
+    def __init__(self, vel=np.zeros((2,5)), name=None):
+        # super(Trajectory, self).__init__()
+        self.vel = vel
+        self.name = name
+        
 
 class World:
     """A physics simulation world, with bodies and constraints.
@@ -20,14 +28,18 @@ class World:
                  contact_callback=Defaults.CONTACT, eps=Defaults.EPSILON,
                  tol=Defaults.TOL, fric_dirs=Defaults.FRIC_DIRS,
                  post_stab=Defaults.POST_STABILIZATION, strict_no_penetration=True):
-        # self.contacts_debug = None  # XXX
+        self.contacts_debug = None  # XXX
 
         # Load classes from string name defined in utils
         self.engine = get_instance(engines_module, engine)
         self.contact_callback = get_instance(contacts_module, contact_callback)
-
+        self.states = []
+        self.times = []
         self.t = 0
+        self.t_prev = 0
+        self.idx = 0
         self.dt = dt
+        self.traj = []
         self.eps = eps
         self.tol = tol
         self.fric_dirs = fric_dirs
@@ -81,6 +93,17 @@ class World:
 
     # @profile
     def step_dt(self, dt):
+        # gets velocities
+        for body in self.bodies:
+            for tr in self.traj:
+                if body.name == tr.name:
+                    if self.idx < np.shape(tr.vel)[1]:
+                        vel = tr.vel[:,self.idx]
+                        body.v = torch.cat([vel.new_zeros(1), vel])
+
+        # updates velocities
+        self.set_v(torch.cat([b.v for b in self.bodies]))
+
         start_p = torch.cat([b.p for b in self.bodies])
         start_rot_joints = [(j[0].rot1, j[0].rot2) for j in self.joints]
         new_v = self.engine.solve_dynamics(self, dt)
@@ -92,9 +115,11 @@ class World:
             for joint in self.joints:
                 joint[0].move(dt)
             self.find_contacts()
+
             if all([c[0][3].item() <= self.tol for c in self.contacts]):
                 break
             else:
+                # break
                 if not self.strict_no_pen and dt < self.dt / 4:
                     # if step becomes too small, just continue
                     break
@@ -119,6 +144,8 @@ class World:
             self.set_v(tmp_v)
 
             self.find_contacts()  # XXX Necessary to recheck contacts?
+        self.times.append(self.t)
+
         self.t += dt
 
     def get_v(self):
@@ -283,22 +310,23 @@ def run_world(world, animation_dt=None, run_time=10, print_time=True,
 
                 # Visualize contact points and normal for debug
                 # (Uncomment contacts_debug line in contacts handler):
-                # if world.contacts_debug:
-                #     for c in world.contacts_debug:
-                #         (normal, p1, p2, penetration), b1, b2 = c
-                #         b1_pos = world.bodies[b1].pos
-                #         b2_pos = world.bodies[b2].pos
-                #         p1 = p1 + b1_pos
-                #         p2 = p2 + b2_pos
-                #         pygame.draw.circle(screen, (0, 255, 0), p1.data.numpy().astype(int), 5)
-                #         pygame.draw.circle(screen, (0, 0, 255), p2.data.numpy().astype(int), 5)
-                #         pygame.draw.line(screen, (0, 255, 0), p1.data.numpy().astype(int),
-                #                          (p1.data.numpy() + normal.data.numpy() * 100).astype(int), 3)
+                if world.contacts_debug:
+                    for c in world.contacts_debug:
+                        (normal, p1, p2, penetration), b1, b2 = c
+                        b1_pos = world.bodies[b1].pos
+                        b2_pos = world.bodies[b2].pos
+                        p1 = p1 + b1_pos
+                        p2 = p2 + b2_pos
+                        pygame.draw.circle(screen, (0, 255, 0), p1.data.numpy().astype(int), 5)
+                        pygame.draw.circle(screen, (0, 0, 255), p2.data.numpy().astype(int), 5)
+                        pygame.draw.line(screen, (0, 255, 0), p1.data.numpy().astype(int),
+                                         (p1.data.numpy() + normal.data.numpy() * 100).astype(int), 3)
 
                 if not recorder:
+                    pass
                     # Don't refresh screen if recording
                     pygame.display.update(update_list)
-                    # pygame.display.flip()  # XXX
+                    pygame.display.flip()  # XXX
                 else:
                     recorder.record(world.t)
 
@@ -316,5 +344,91 @@ def run_world(world, animation_dt=None, run_time=10, print_time=True,
 
         elapsed_time = time.time() - start_time
         if print_time:
-            print('\r ', '{} / {}  {} '.format(int(world.t), int(elapsed_time),
+            print('\r ', '{} / {}  {} '.format(float(world.t), float(elapsed_time),
+                                               1 / animation_dt), end='')
+
+def run_world_traj(world, animation_dt=None, run_time=10, print_time=True,
+              screen=None, recorder=None, pixels_per_meter=1, traj = [Trajectory()]):
+    """Helper function to run a simulation forward once a world is created.
+    """
+    # If in batched mode don't display simulation
+    if hasattr(world, 'worlds'):
+        screen = None
+
+    if screen is not None:
+        import pygame
+        background = pygame.Surface(screen.get_size())
+        background = background.convert()
+        background.fill((255, 255, 255))
+
+    if animation_dt is None:
+        animation_dt = float(world.dt)
+    elapsed_time = 0.
+    prev_frame_time = -animation_dt
+    start_time = time.time()
+
+    world.idx = 0
+    world.traj = traj
+
+    while world.t < run_time:
+        world.step()
+        if world.t - world.t_prev > 0.1:
+            for body in world.bodies:
+                if body.name == "obj":
+                    world.states.append(body.p)
+            world.idx += 1
+            world.t_prev = world.t
+        # pdb.set_trace()
+        if screen is not None:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return
+
+            if elapsed_time - prev_frame_time >= animation_dt or recorder:
+                prev_frame_time = elapsed_time
+
+                screen.blit(background, (0, 0))
+                update_list = []
+                for body in world.bodies:
+                    update_list += body.draw(screen, pixels_per_meter=pixels_per_meter)
+                for joint in world.joints:
+                    update_list += joint[0].draw(screen, pixels_per_meter=pixels_per_meter)
+
+                # Visualize contact points and normal for debug
+                # (Uncomment contacts_debug line in contacts handler):
+                if world.contacts_debug:
+                    for c in world.contacts_debug:
+                        (normal, p1, p2, penetration), b1, b2 = c
+                        b1_pos = world.bodies[b1].pos
+                        b2_pos = world.bodies[b2].pos
+                        p1 = p1 + b1_pos
+                        p2 = p2 + b2_pos
+                        pygame.draw.circle(screen, (0, 255, 0), p1.data.numpy().astype(int), 5)
+                        pygame.draw.circle(screen, (0, 0, 255), p2.data.numpy().astype(int), 5)
+                        pygame.draw.line(screen, (0, 255, 0), p1.data.numpy().astype(int),
+                                         (p1.data.numpy() + normal.data.numpy() * 100).astype(int), 3)
+
+                if not recorder:
+                    pass
+                    # Don't refresh screen if recording
+                    pygame.display.update(update_list)
+                    pygame.display.flip()  # XXX
+                else:
+                    recorder.record(world.t)
+
+            elapsed_time = time.time() - start_time
+            if not recorder:
+                # Adjust frame rate dynamically to keep real time
+                wait_time = world.t - elapsed_time
+                if wait_time >= 0 and not recorder:
+                    wait_time += animation_dt  # XXX
+                    time.sleep(max(wait_time - animation_dt, 0))
+                #     animation_dt -= 0.005 * wait_time
+                # elif wait_time < 0:
+                #     animation_dt += 0.005 * -wait_time
+                # elapsed_time = time.time() - start_time
+
+        elapsed_time = time.time() - start_time
+        if print_time:
+            print('\r ', '{} / {}  {} '.format(float(world.t), float(elapsed_time),
                                                1 / animation_dt), end='')

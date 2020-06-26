@@ -6,7 +6,7 @@ Based on: M. B. Cline, Rigid body simulation with contact and constraints, 2002
 import torch
 
 from lcp_physics.lcp.lcp import LCPFunction
-
+import pdb
 
 class Engine:
     """Base class for stepping engine."""
@@ -27,11 +27,11 @@ class PdipmEngine(Engine):
         t = world.t
         Je = world.Je()
         neq = Je.size(0) if Je.ndimension() > 0 else 0
-
         f = world.apply_forces(t)
         u = torch.matmul(world.M(), world.get_v()) + dt * f
         if neq > 0:
             u = torch.cat([u, u.new_zeros(neq)])
+
         if not world.contacts:
             # No contact constraints, no complementarity conditions
             if neq > 0:
@@ -72,9 +72,10 @@ class PdipmEngine(Engine):
             F[:, -mu.size(1):, mu.size(2):mu.size(2) + E.size(1)] = \
                 -E.transpose(1, 2)
             h = torch.cat([v, v.new_zeros(v.size(0), Jf.size(1) + mu.size(1))], 1)
-
             x = -self.lcp_solver(max_iter=self.max_iter, verbose=-1)(M, u, G, h, Je, b, F)
+
         new_v = x[:world.vec_len * len(world.bodies)].squeeze(0)
+        
         return new_v
 
     def post_stabilization(self, world):

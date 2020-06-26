@@ -36,7 +36,7 @@ class Defaults:
     LAYOUT = torch.strided
 
     # Post stabilization flag
-    POST_STABILIZATION = False
+    POST_STABILIZATION = True
 
     def __init__(self):
         pass
