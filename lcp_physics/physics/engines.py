@@ -18,9 +18,9 @@ class PdipmEngine(Engine):
     """Engine that uses the primal dual interior point method LCP solver.
     """
     def __init__(self, max_iter=10):
-        self.lcp_solver = LCPFunction
         self.cached_inverse = None
         self.max_iter = max_iter
+        self.lcp_solver = LCPFunction
 
     # @profile
     def solve_dynamics(self, world, dt):

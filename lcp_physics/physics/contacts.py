@@ -1,12 +1,12 @@
 import random
 
-import ode
+# import ode
 
 import torch
 
 from .bodies import Circle
 from .utils import Indices, Defaults, left_orthogonal
-
+import pdb
 
 X = Indices.X
 Y = Indices.Y
@@ -23,28 +23,30 @@ class ContactHandler:
 
 class OdeContactHandler(ContactHandler):
     def __call__(self, args, geom1, geom2):
-        if geom1 in geom2.no_contact:
-            return
-        world = args[0]
-        base_tensor = world.bodies[0].p
+        raise NotImplementedError
+        # if geom1 in geom2.no_contact:
+        #     return
+        # world = args[0]
+        # base_tensor = world.bodies[0].p
 
-        contacts = ode.collide(geom1, geom2)
-        for c in contacts:
-            point, normal, penetration, geom1, geom2 = c.getContactGeomParams()
-            # XXX Simple disambiguation of 3D repetition of contacts
-            if point[2] > 0:
-                continue
-            normal = base_tensor.new_tensor(normal[:DIM])
-            point = base_tensor.new_tensor(point)
-            penetration = base_tensor.new_tensor([penetration])
-            penetration -= 2 * world.eps
-            if penetration.item() < -2 * world.eps:
-                return
-            p1 = point - base_tensor.new_tensor(geom1.getPosition())
-            p2 = point - base_tensor.new_tensor(geom2.getPosition())
-            world.contacts.append(((normal, p1[:DIM], p2[:DIM], penetration),
-                                    geom1.body, geom2.body))
-            world.contacts_debug = world.contacts  # XXX
+        # contacts = ode.collide(geom1, geom2)
+        # for c in contacts:
+        #     point, normal, penetration, geom1, geom2 = c.getContactGeomParams()
+        #     # XXX Simple disambiguation of 3D repetition of contacts
+        #     if point[2] > 0:
+        #         continue
+        #     normal = base_tensor.new_tensor(normal[:DIM])
+        #     point = base_tensor.new_tensor(point)
+        #     penetration = base_tensor.new_tensor([penetration])
+        #     penetration -= 2 * world.eps
+        #     if penetration.item() < -2 * world.eps:
+        #         return
+        #     p1 = point - base_tensor.new_tensor(geom1.getPosition())
+        #     p2 = point - base_tensor.new_tensor(geom2.getPosition())
+        #     world.contacts.append(((normal, p1[:DIM], p2[:DIM], penetration),
+        #                             geom1.body, geom2.body))
+
+        #     world.contacts_debug = world.contacts  # XXX
 
 
 class DiffContactHandler(ContactHandler):
@@ -57,7 +59,7 @@ class DiffContactHandler(ContactHandler):
     def __call__(self, args, geom1, geom2):
         # self.debug_callback(args, geom1, geom2)
 
-        if geom1 in geom2.no_contact:
+        if geom1.body_ref in geom2.no_contact:
             return
         world = args[0]
 
@@ -74,9 +76,16 @@ class DiffContactHandler(ContactHandler):
             if penetration.item() < -world.eps:
                 return
             normal = normal / dist
-            p1 = -normal * (b1.rad - penetration / 2)
-            p2 = normal * (b2.rad - penetration / 2)
-            pts = [(normal, p1, p2, penetration)]
+
+            # contact points on surface of object if not interpenetrating,
+            #  otherwise its the point  midway between two objects inside of them
+            p1 = -normal * b1.rad
+            p2 = normal * b2.rad
+            if penetration > 0:
+                p1 = p1 + normal * penetration / 2  # p1 = -normal * (b1.rad - penetration / 2)
+                p2 = p2 - normal * penetration / 2  # p2 = normal * (b2.rad - penetration / 2)
+
+            pts = [[normal, p1, p2, penetration]]
         elif is_circle_g1 or is_circle_g2:
             if is_circle_g2:
                 # set circle to b1
@@ -141,7 +150,7 @@ class DiffContactHandler(ContactHandler):
                 # flip back values for circle as g2
                 best_normal = -best_normal
                 best_pt1, best_pt2 = best_pt2, best_pt1
-            pts = [(best_normal, best_pt1, best_pt2, -best_dist)]
+            pts = [[best_normal, best_pt1, best_pt2, -best_dist]]
         else:
             # SAT for hull x hull contact
             # TODO Optimize for rectangle vs rectangle?
@@ -175,7 +184,7 @@ class DiffContactHandler(ContactHandler):
                     if dist.item() <= world.eps:
                         pt1 = v + normal * -dist
                         pt2 = pt1 + b2.pos - b1.pos
-                        pts.append((normal, pt2, pt1, -dist))
+                        pts.append([normal, pt2, pt1, -dist])
             else:
                 normal = -contact1[3]
                 half_edge_norm = contact1[5] / 2
@@ -195,13 +204,28 @@ class DiffContactHandler(ContactHandler):
                 pts = []
                 for v in clipped_verts:
                     dist = normal.dot(v - b1.verts[ref_edge_idx])
+                    # import pdb
+                    # pdb.set_trace()
                     if dist.item() <= world.eps:
                         pt1 = v + normal * -dist
                         pt2 = pt1 + b1.pos - b2.pos
-                        pts.append((-normal, pt1, pt2, -dist))
+                        pts.append([-normal, pt1, pt2, -dist])
 
         for p in pts:
-            world.contacts.append((p, geom1.body, geom2.body))
+            world.contacts.append([p, geom1.body, geom2.body])
+
+        # smooth contact hack
+        for i, contact in enumerate(world.contacts):
+            # at 0 penetration (objects exact contact) we want p percent of contact normal.
+            # compute adjustment with inverse of sigmoid
+            p = torch.tensor(0.999)
+            delta = torch.log(p / (1 - p))
+            eps = torch.tensor(1e-6)
+
+            # contact[0] = (normal, pt1, pt2, penetration_dist)
+            contact[0][0] = contact[0][0] # * torch.sigmoid(0.01*contact[0][3] + delta) * torch.sigmoid(-2*contact[0][3] + delta) + eps
+            # print(contact[0][3])
+
         world.contacts_debug = world.contacts  # XXX
 
     @staticmethod
@@ -246,6 +270,46 @@ class DiffContactHandler(ContactHandler):
                 best_vertex = support_idx
                 best_edge_norm = edge_norm
                 best_edge = idx
+        return best_dist, best_pt1, best_pt2, -best_normal, \
+            best_vertex, best_edge_norm, best_edge
+
+    @staticmethod
+    def test_separations_all(hull1, hull2, eps=0):
+        verts1, verts2 = hull1.verts, hull2.verts
+        num_verts = len(verts1)
+        
+        # saves a list
+        best_dist = []
+        best_normal = []
+        best_vertex = []
+        best_edge_norm = []
+        best_edge = []
+        best_pt1 = []
+        best_pt2 = []
+
+        start_edge = hull1.last_sat_idx
+        for i in range(start_edge, num_verts + start_edge):
+            idx = i % num_verts
+            edge = verts1[(idx+1) % num_verts] - verts1[idx]
+            edge_norm = edge.norm()
+            normal = left_orthogonal(edge) / edge_norm
+            support_point, support_idx = DiffContactHandler.get_support(verts2, -normal)
+            # adjust to hull1's frame
+            support_point = support_point + hull2.pos - hull1.pos
+            # get distance from support point to edge
+            dist = normal.dot(support_point - verts1[idx])
+
+            # if dist.item() > best_dist.item():
+            #     if dist.item() > eps:
+            #         # exit early if separating axis found
+            #         return dist, None, None, None, None, None, idx
+            best_dist.append(dist)
+            best_normal.append(normal)
+            best_pt1.append(support_point + normal * -dist)
+            best_pt2.append(best_pt1 + hull1.pos - hull2.pos)
+            best_vertex.append(support_idx)
+            best_edge_norm.append(edge_norm)
+            best_edge.append(idx)
         return best_dist, best_pt1, best_pt2, -best_normal, \
             best_vertex, best_edge_norm, best_edge
 

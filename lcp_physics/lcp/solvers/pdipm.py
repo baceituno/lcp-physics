@@ -7,7 +7,7 @@ from enum import Enum
 from ..util import efficient_btriunpack
 
 from lcp_physics.lcp.util import get_sizes, bdiag
-import numpy as np
+
 
 shown_btrifact_warning = False
 
@@ -22,22 +22,19 @@ def btrifact_hack(x):
 lcp warning: Pivoting will always happen and will significantly
 slow down your code. Please use the master branch of PyTorch
 to get a version that disables pivoting on the GPU.
-----sdsdasdasdsad------
+----------
 """)
             shown_btrifact_warning = True
-        return x.lu()
+        return x.btrifact()
 
 
 INACC_ERR = """
 --------
 lcp warning: Returning an inaccurate and potentially incorrect solution.
-
 Some residual is large.
 Your problem may be infeasible or difficult.
-
 You can try using the verbose option to check the convergence status of
 our solver while increasing the number of iterations.
-
 Advanced users:
 You can also try to enable iterative refinement in the solver:
 https://github.com/locuslab/qpth/issues/6
@@ -71,7 +68,7 @@ def forward(Q, p, G, h, A, b, F, Q_LU, S_LU, R,
     # Make all of the inequality dual variables >= 1.
     M = torch.min(z, 1)[0]
     M = M.view(M.size(0), 1).repeat(1, nineq)
-    I = M <= 0
+    I = (M <= 0).bool()
     z[I] -= M[I] - 1
 
     best = {'resids': None, 'x': None, 'z': None, 's': None, 'y': None}
@@ -330,8 +327,7 @@ def solve_kkt(Q_LU, d, G, A, S_LU, rx, rs, rz, ry):
 
     nineq, nz, neq, nBatch = get_sizes(G, A)
 
-    invQ_rx = rx.T.lu_solve(*Q_LU)[0].view(1,-1)  # Q-1 rx
-    
+    invQ_rx = rx.T.lu_solve(*Q_LU).view(1, -1)  # Q-1 rx
     if neq > 0:
         # A Q-1 rx - ry
         # G Q-1 rx + rs / d - rz
@@ -340,14 +336,14 @@ def solve_kkt(Q_LU, d, G, A, S_LU, rx, rs, rz, ry):
     else:
         h = invQ_rx.unsqueeze(1).bmm(G.transpose(1, 2)).squeeze(1) + rs / d - rz
 
-    w = -(h.T.lu_solve(*S_LU))[0].view(1,-1)  # S-1 h =
+    w = -(h.T.lu_solve(*S_LU).view(1, -1))  # S-1 h =
 
     g1 = -rx - w[:, neq:].unsqueeze(1).bmm(G).squeeze(1)  # -rx - GT w = -rx -GT S-1 h
     if neq > 0:
         g1 -= w[:, :neq].unsqueeze(1).bmm(A).squeeze(1)  # - AT w = -AT S-1 h
     g2 = -rs - w[:, neq:]
 
-    dx = g1.T.lu_solve(*Q_LU)[0].view(1,-1)  # Q-1 g1 = - Q-1 AT S-1 h
+    dx = g1.T.lu_solve(*Q_LU).view(1, -1)  # Q-1 g1 = - Q-1 AT S-1 h
     ds = g2 / d  # g2 / d = (-rs - w) / d
     dz = w[:, neq:]
     dy = w[:, :neq] if neq > 0 else None
@@ -365,7 +361,7 @@ def pre_factor_kkt(Q, G, F, A):
         raise RuntimeError("""
 lcp Error: Cannot perform LU factorization on Q.
 Please make sure that your Q matrix is PSD and has
-a non-zero diagvdfvsdfdf sonal.
+a non-zero diagonal.
 """)
 
     # S = [ A Q^{-1} A^T        A Q^{-1} G^T          ]
@@ -426,7 +422,7 @@ def factor_kkt(S_LU, R, d):
     # T[factor_kkt_eye] += (1. / d).view(-1)
     # more efficient version of these two lines in pytorch versions > 0.3.1
     T = torch.zeros_like(R)
-    T.masked_scatter_(factor_kkt_eye, (1. / d).view(-1))
+    T.masked_scatter_(factor_kkt_eye.bool(), (1. / d).view(-1))
     T += R.clone()
 
     T_LU = btrifact_hack(T)

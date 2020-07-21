@@ -1,5 +1,5 @@
 from .utils import get_tensor
-
+import torch
 
 def down_force(t):
     return ExternalForce.DOWN
@@ -66,6 +66,7 @@ class Gravity(ExternalForce):
         down_tensor = ExternalForce.DOWN.type_as(body._base_tensor).to(body._base_tensor)
         self.cached_force = down_tensor * self.body.mass * self.multiplier
 
+
 class MDP(ExternalForce):
     """Gravity force object, constantly returns a downwards pointing force of
        magnitude body.mass * g.
@@ -77,11 +78,39 @@ class MDP(ExternalForce):
         self.cached_force = None
 
     def force(self, t):
+        agains_vel_tensor = 2*torch.nn.Sigmoid()(self.body.v) - 1
+        self.cached_force = -agains_vel_tensor * self.body.mass * self.multiplier
+        self.cached_force[0] = self.cached_force[0]*100
         return self.cached_force
 
     def set_body(self, body):
         super().set_body(body)
         vel = body.v
-        agains_vel_tensor = get_tensor(vel).type_as(body._base_tensor).to(body._base_tensor)
-        print(agains_vel_tensor)
-        self.cached_force = agains_vel_tensor * self.body.mass * self.multiplier
+        agains_vel_tensor = 2*torch.nn.Sigmoid()(vel) - 1
+        self.cached_force = -agains_vel_tensor * self.body.mass * self.multiplier
+
+class FingerTrajectory(ExternalForce):
+    """Object trajectory ass force: body.mass * ddp.
+    """
+
+    def __init__(self, traj):
+        self.Traj = traj
+        self.multiplier = 1
+        self.body = None
+        self.t_prev = 0
+        self.idx = 0
+        self.cached_force = None
+
+    def force(self, t):
+        if t - self.t_prev > 0.1:
+            self.t_prev = t
+            self.idx += 1
+            self.cached_force = self.Traj[:,self.idx] * self.body.mass
+        else:
+            self.cached_force = self.Traj[:,self.idx] * self.body.mass
+        return self.cached_force
+
+    def set_body(self, body):
+        super().set_body(body)
+        vel = body.v
+        self.cached_force = self.Traj[:,0]

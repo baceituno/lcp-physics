@@ -49,10 +49,13 @@ class Body(object):
         self.restitution = get_tensor(restitution, base_tensor=self._base_tensor)
         self.forces = []
 
+        self.idx = 0
+
         self.col = col
         self.thickness = thickness
 
         self._create_geom()
+        self.no_contact = set()
 
     def _set_base_tensor(self, args):
         """Check if any tensor provided and if so set as base tensor to
@@ -87,13 +90,13 @@ class Body(object):
         self.rot = self.p[0:1]
         self.pos = self.p[1:]
 
-        self.geom.setPosition([self.pos[0], self.pos[1], 0.0])
-        if update_geom_rotation:
-            # XXX sign correction
-            s = math.sin(-self.rot.item() / 2)
-            c = math.cos(-self.rot.item() / 2)
-            quat = [s, 0, 0, c]  # Eq 2.3
-            self.geom.setQuaternion(quat)
+        # self.geom.setPosition([self.pos[0], self.pos[1], 0.0])
+        # if update_geom_rotation:
+        #     # XXX sign correction
+        #     s = math.sin(-self.rot.item() / 2)
+        #     c = math.cos(-self.rot.item() / 2)
+        #     quat = [s, 0, 0, c]  # Eq 2.3
+        #     self.geom.setQuaternion(quat)
 
     def apply_forces(self, t):
         if len(self.forces) == 0:
@@ -102,8 +105,10 @@ class Body(object):
             return sum([f.force(t) for f in self.forces])
 
     def add_no_contact(self, other):
-        self.geom.no_contact.add(other.geom)
-        other.geom.no_contact.add(self.geom)
+        # self.geom.no_contact.add(other.geom)
+        # other.geom.no_contact.add(self.geom)
+        self.no_contact.add(other)
+        other.no_contact.add(self)
 
     def add_force(self, f):
         self.forces.append(f)
@@ -127,10 +132,11 @@ class Circle(Body):
         return mass * self.rad * self.rad / 2
 
     def _create_geom(self):
-        self.geom = ode.GeomSphere(None, self.rad.item() + self.eps.item())
-        self.geom.setPosition(torch.cat([self.pos,
-                                         self.pos.new_zeros(1)]))
-        self.geom.no_contact = set()
+        # self.geom = ode.GeomSphere(None, self.rad.item() + self.eps.item())
+        # self.geom.setPosition(torch.cat([self.pos,
+        #                                  self.pos.new_zeros(1)]))
+        # self.geom.no_contact = set()
+        pass
 
     def move(self, dt, update_geom_rotation=False):
         super().move(dt, update_geom_rotation=update_geom_rotation)
@@ -191,15 +197,16 @@ class Hull(Body):
         return 1 / 6 * mass * numerator / denominator
 
     def _create_geom(self):
-        # find vertex furthest from centroid
-        max_rad = max([v.dot(v).item() for v in self.verts])
-        max_rad = math.sqrt(max_rad)
+        # # find vertex furthest from centroid
+        # max_rad = max([v.dot(v).item() for v in self.verts])
+        # max_rad = math.sqrt(max_rad)
 
-        # XXX Using sphere with largest vertex ray for broadphase for now
-        self.geom = ode.GeomSphere(None, max_rad + self.eps.item())
-        self.geom.setPosition(torch.cat([self.pos,
-                                         self.pos.new_zeros(1)]))
-        self.geom.no_contact = set()
+        # # XXX Using sphere with largest vertex ray for broadphase for now
+        # self.geom = ode.GeomSphere(None, max_rad + self.eps.item())
+        # self.geom.setPosition(torch.cat([self.pos,
+        #                                  self.pos.new_zeros(1)]))
+        # self.geom.no_contact = set()
+        pass
 
     def set_p(self, new_p, update_geom_rotation=False):
         rot = new_p[0] - self.p[0]
@@ -273,10 +280,11 @@ class Rect(Hull):
         return mass * torch.sum(self.dims ** 2) / 12
 
     def _create_geom(self):
-        self.geom = ode.GeomBox(None, torch.cat([self.dims + 2 * self.eps.item(),
-                                                 self.dims.new_ones(1)]))
-        self.geom.setPosition(torch.cat([self.pos, self.pos.new_zeros(1)]))
-        self.geom.no_contact = set()
+        # self.geom = ode.GeomBox(None, torch.cat([self.dims + 2 * self.eps.item(),
+        #                                          self.dims.new_ones(1)]))
+        # self.geom.setPosition(torch.cat([self.pos, self.pos.new_zeros(1)]))
+        # self.geom.no_contact = set()
+        pass
 
     def rotate_verts(self, rot):
         rot_mat = rotation_matrix(rot)
