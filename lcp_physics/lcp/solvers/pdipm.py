@@ -2,6 +2,7 @@
 """
 
 import torch
+import numpy as np
 from enum import Enum
 
 from ..util import efficient_btriunpack
@@ -62,7 +63,7 @@ def forward(Q, p, G, h, A, b, F, Q_LU, S_LU, R,
     # Make all of the slack variables >= 1.
     M = torch.min(s, 1)[0]
     M = M.view(M.size(0), 1).repeat(1, nineq)
-    I = M <= 0
+    I = (M <= 0).bool()
     s[I] -= M[I] - 1
 
     # Make all of the inequality dual variables >= 1.
@@ -85,14 +86,14 @@ def forward(Q, p, G, h, A, b, F, Q_LU, S_LU, R,
             - torch.bmm(z.unsqueeze(1), F.transpose(1, 2)).squeeze(1)
         ry = torch.bmm(x.unsqueeze(1), A.transpose(
             1, 2)).squeeze(1) - b if neq > 0 else 0.0
-        mu = torch.abs((s * z).sum(1).squeeze() / nineq)
+        mu = torch.abs((s * z).sum(1).squeeze() / (nineq + 1e-30))
         z_resid = torch.norm(rz, 2, 1).squeeze()
         y_resid = torch.norm(ry, 2, 1).squeeze() if neq > 0 else 0
         pri_resid = y_resid + z_resid
         dual_resid = torch.norm(rx, 2, 1).squeeze()
         resids = pri_resid + dual_resid + nineq * mu
 
-        d = z / s
+        d = z / (s + 1e-30)
         try:
             factor_kkt(S_LU, R, d)
         except:
@@ -132,6 +133,11 @@ def forward(Q, p, G, h, A, b, F, Q_LU, S_LU, R,
                 print(INACC_ERR)
             return best['x'], best['y'], best['z'], best['s']
 
+        if np.isnan(rs.sum()).item() > 0:
+            print('\n\n1')
+            print(rs)
+            import pdb
+            pdb.set_trace()
         dx_aff, ds_aff, dz_aff, dy_aff = solve_kkt(
             Q_LU, d, G, A, S_LU, rx, rs, rz, ry)
 
@@ -139,18 +145,19 @@ def forward(Q, p, G, h, A, b, F, Q_LU, S_LU, R,
         alpha = torch.min(torch.min(get_step(z, dz_aff),
                                     get_step(s, ds_aff)),
                           torch.ones(batch_size).type_as(Q))
+
         alpha_nineq = alpha.repeat(nineq, 1).t()
-        t1 = s + alpha_nineq * ds_aff
-        t2 = z + alpha_nineq * dz_aff
+        t1 = s + alpha_nineq * (ds_aff + 1e-30)
+        t2 = z + alpha_nineq * (dz_aff + 1e-30)
         t3 = torch.sum(t1 * t2, 1).squeeze()
         t4 = torch.sum(s * z, 1).squeeze()
-        sig = (t3 / t4)**3
+        sig = (t3 / (t4 + 1e-30))**3
 
         rx = Q.new_zeros(batch_size, nz)
-        rs = ((-mu * sig).repeat(nineq, 1).t() + ds_aff * dz_aff) / s
+        rs = ((-mu * sig).repeat(nineq, 1).t() + ds_aff * dz_aff) / (s + 1e-30)
         rz = Q.new_zeros(batch_size, nineq)
         ry = Q.new_zeros(batch_size, neq)
-
+        
         dx_cor, ds_cor, dz_cor, dy_cor = solve_kkt(
             Q_LU, d, G, A, S_LU, rx, rs, rz, ry)
 
@@ -177,10 +184,18 @@ def forward(Q, p, G, h, A, b, F, Q_LU, S_LU, R,
 
 
 def get_step(v, dv):
-    a = -v / dv
+    a = -v / (dv + 1e-12)
     a[dv > 0] = max(1.0, a.max())
     step = a.min(1)[0].squeeze()
     return step
+
+# def get_step(v, dv):
+    # I = dv < 1e-12
+    # if torch.sum(I) > 0:  # TODO: Use something like torch.any(dv < 0)
+    #     a = -v / (dv + 1e-30)
+    #     return torch.min(a[I])
+    # else:
+    #     return 1
 
 
 def unpack_kkt(v, nz, nineq, neq):
@@ -210,115 +225,6 @@ def kkt_resid_reg(Q_tilde, D_tilde, G, A, F_tilde, eps, dx, ds, dz, dy, rx, rs, 
     return resx, ress, resz, resy
 
 
-def solve_kkt_ir(Q, D, G, A, F, rx, rs, rz, ry, niter=1):
-    """Inefficient iterative refinement."""
-    nineq, nz, neq, nBatch = get_sizes(G, A)
-
-    eps = 1e-7
-    Q_tilde = Q + eps * torch.eye(nz).type_as(Q).repeat(nBatch, 1, 1)
-    D_tilde = D + eps * torch.eye(nineq).type_as(Q).repeat(nBatch, 1, 1)
-
-    # XXX Might not workd for batch size > 1
-    C_tilde = -eps * torch.eye(neq + nineq).type_as(Q_tilde).repeat(nBatch, 1, 1)
-    if F is not None:  # XXX inverted sign for F below
-        C_tilde[:, :nineq, :nineq] -= F
-    F_tilde = C_tilde[:, :nineq, :nineq]
-
-    dx, ds, dz, dy = factor_solve_kkt_reg(
-        Q_tilde, D_tilde, G, A, C_tilde, rx, rs, rz, ry, eps)
-    resx, ress, resz, resy = kkt_resid_reg(Q, D, G, A, F_tilde, eps,
-                        dx, ds, dz, dy, rx, rs, rz, ry)
-    for k in range(niter):
-        ddx, dds, ddz, ddy = factor_solve_kkt_reg(Q_tilde, D_tilde, G, A, C_tilde,
-                                                  -resx, -ress, -resz,
-                                                  -resy if resy is not None else None,
-                                                  eps)
-        dx, ds, dz, dy = [v + dv if v is not None else None
-                          for v, dv in zip((dx, ds, dz, dy), (ddx, dds, ddz, ddy))]
-        resx, ress, resz, resy = kkt_resid_reg(Q, D, G, A, F_tilde, eps,
-                            dx, ds, dz, dy, rx, rs, rz, ry)
-
-    return dx, ds, dz, dy
-
-
-def factor_solve_kkt_reg(Q_tilde, D, G, A, C_tilde, rx, rs, rz, ry, eps):
-    nineq, nz, neq, nBatch = get_sizes(G, A)
-
-    H_ = torch.zeros(nBatch, nz + nineq, nz + nineq).type_as(Q_tilde)
-    H_[:, :nz, :nz] = Q_tilde
-    H_[:, -nineq:, -nineq:] = D
-    if neq > 0:
-        # H_ = torch.cat([torch.cat([Q, torch.zeros(nz,nineq).type_as(Q)], 1),
-        # torch.cat([torch.zeros(nineq, nz).type_as(Q), D], 1)], 0)
-        A_ = torch.cat([torch.cat([G, torch.eye(nineq).type_as(Q_tilde).repeat(nBatch, 1, 1)], 2),
-                        torch.cat([A, torch.zeros(nBatch, neq, nineq).type_as(Q_tilde)], 2)], 1)
-        g_ = torch.cat([rx, rs], 1)
-        h_ = torch.cat([rz, ry], 1)
-    else:
-        A_ = torch.cat(
-            [G, torch.eye(nineq).type_as(Q_tilde).repeat(nBatch, 1, 1)], 2)
-        g_ = torch.cat([rx, rs], 1)
-        h_ = rz
-
-    H_LU = btrifact_hack(H_)
-
-    invH_A_ = A_.transpose(1, 2).lu_solve(*H_LU)  # H-1 AT
-    invH_g_ = g_.lu_solve(*H_LU)  # H-1 g
-
-    S_ = torch.bmm(A_, invH_A_)  # A H-1 AT
-    # A H-1 AT + C_tilde
-    S_ -= C_tilde
-    S_LU = btrifact_hack(S_)
-    # [(H-1 g)T AT]T - h = A H-1 g - h
-    t_ = torch.bmm(invH_g_.unsqueeze(1), A_.transpose(1, 2)).squeeze(1) - h_
-    # w = (A H-1 AT + C_tilde)-1 (A H-1 g - h) <= Av - eps I w = h
-    w_ = -t_.lu_solve(*S_LU)
-    # Shouldn't it be just g (no minus)?
-    # (Doesn't seem to make a difference, though...)
-    t_ = -g_ - w_.unsqueeze(1).bmm(A_).squeeze()  # -g - AT w
-    v_ = t_.lu_solve(*H_LU)  # v = H-1 (-g - AT w)
-
-    dx = v_[:, :nz]
-    ds = v_[:, nz:]
-    dz = w_[:, :nineq]
-    dy = w_[:, nineq:] if neq > 0 else None
-
-    return dx, ds, dz, dy
-
-
-def factor_solve_kkt(Q_tilde, D_tilde, A_, C_tilde, rx, rs, rz, ry, ns):
-    nineq, nz, neq, nBatch = ns
-
-    H_ = torch.zeros(nBatch, nz + nineq, nz + nineq).type_as(Q_tilde)
-    H_[:, :nz, :nz] = Q_tilde
-    H_[:, -nineq:, -nineq:] = D_tilde
-    if neq > 0:
-        g_ = torch.cat([rx, rs], 1)
-        h_ = torch.cat([rz, ry], 1)
-    else:
-        g_ = torch.cat([rx, rs], 1)
-        h_ = rz
-
-    H_LU = btrifact_hack(H_)
-
-    invH_A_ = A_.transpose(1, 2).lu_solve(*H_LU)
-    invH_g_ = g_.lu_solve(*H_LU)
-
-    S_ = torch.bmm(A_, invH_A_) + C_tilde
-    S_LU = btrifact_hack(S_)
-    t_ = torch.bmm(invH_g_.unsqueeze(1), A_.transpose(1, 2)).squeeze(1) - h_
-    w_ = -t_.lu_solve(*S_LU)
-    t_ = -g_ - w_.unsqueeze(1).bmm(A_).squeeze()
-    v_ = t_.lu_solve(*H_LU)
-
-    dx = v_[:, :nz]
-    ds = v_[:, nz:]
-    dz = w_[:, :nineq]
-    dy = w_[:, nineq:] if neq > 0 else None
-
-    return dx, ds, dz, dy
-
-
 def solve_kkt(Q_LU, d, G, A, S_LU, rx, rs, rz, ry):
     """ Solve KKT equations for the affine step"""
 
@@ -332,11 +238,20 @@ def solve_kkt(Q_LU, d, G, A, S_LU, rx, rs, rz, ry):
         # A Q-1 rx - ry
         # G Q-1 rx + rs / d - rz
         h = torch.cat([invQ_rx.unsqueeze(1).bmm(A.transpose(1, 2)).squeeze(1) - ry,
-                       invQ_rx.unsqueeze(1).bmm(G.transpose(1, 2)).squeeze(1) + rs / d - rz], 1)
+                       invQ_rx.unsqueeze(1).bmm(G.transpose(1, 2)).squeeze(1) + rs / (d + 1e-30) - rz], 1)
     else:
-        h = invQ_rx.unsqueeze(1).bmm(G.transpose(1, 2)).squeeze(1) + rs / d - rz
+        h = invQ_rx.unsqueeze(1).bmm(G.transpose(1, 2)).squeeze(1) + rs / (d + 1e-30) - rz
 
+    S_LU[0] = S_LU[0] + 1e-30
+    Q_LU[0][0] = Q_LU[0][0] + 1e-30
+    
     w = -(h.T.lu_solve(*S_LU).view(1, -1))  # S-1 h =
+
+    if np.isnan(w.sum()).item() > 0 or np.isnan(h.sum()).item() > 0:
+            import pdb
+            print(h)
+            print(w)
+            pdb.set_trace()
 
     g1 = -rx - w[:, neq:].unsqueeze(1).bmm(G).squeeze(1)  # -rx - GT w = -rx -GT S-1 h
     if neq > 0:
@@ -344,12 +259,11 @@ def solve_kkt(Q_LU, d, G, A, S_LU, rx, rs, rz, ry):
     g2 = -rs - w[:, neq:]
 
     dx = g1.T.lu_solve(*Q_LU).view(1, -1)  # Q-1 g1 = - Q-1 AT S-1 h
-    ds = g2 / d  # g2 / d = (-rs - w) / d
+    ds = g2 / ( d + 1e-30) # g2 / d = (-rs - w) / d
     dz = w[:, neq:]
     dy = w[:, :neq] if neq > 0 else None
 
     return dx, ds, dz, dy
-
 
 def pre_factor_kkt(Q, G, F, A):
     """ Perform all one-time factorizations and cache relevant matrix products"""
@@ -409,6 +323,7 @@ factor_kkt_eye = None
 
 # @profile
 def factor_kkt(S_LU, R, d):
+
     """ Factor the U22 block that we can only do after we know D. """
     nBatch, nineq = d.size()
     neq = S_LU[1].size(1) - nineq
@@ -422,7 +337,7 @@ def factor_kkt(S_LU, R, d):
     # T[factor_kkt_eye] += (1. / d).view(-1)
     # more efficient version of these two lines in pytorch versions > 0.3.1
     T = torch.zeros_like(R)
-    T.masked_scatter_(factor_kkt_eye.bool(), (1. / d).view(-1))
+    T.masked_scatter_(factor_kkt_eye.bool(), (1. / (d + 1e-30)).view(-1))
     T += R.clone()
 
     T_LU = btrifact_hack(T)

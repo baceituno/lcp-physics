@@ -13,7 +13,7 @@ class Defaults:
     DIM = 2
 
     # Contact detectopm parameter
-    EPSILON = 30
+    EPSILON = float('inf')
 
     # Penetration tolerance parameter
     TOL = 1e-6
@@ -36,7 +36,7 @@ class Defaults:
     LAYOUT = torch.strided
 
     # Post stabilization flag
-    POST_STABILIZATION = True
+    POST_STABILIZATION = False
 
     def __init__(self):
         pass

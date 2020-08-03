@@ -72,7 +72,8 @@ class PdipmEngine(Engine):
             F[:, -mu.size(1):, mu.size(2):mu.size(2) + E.size(1)] = \
                 -E.transpose(1, 2)
             h = torch.cat([v, v.new_zeros(v.size(0), Jf.size(1) + mu.size(1))], 1)
-            x = -self.lcp_solver(max_iter=self.max_iter, verbose=-1)(M, u, G, h, Je, b, F)
+            solve = self.lcp_solver()
+            x = -solve.apply(M, u, G, h, Je, b, F)
 
         new_v = x[:world.vec_len * len(world.bodies)].squeeze(0)
         
@@ -112,6 +113,7 @@ class PdipmEngine(Engine):
             M = M.unsqueeze(0)
             v = v.unsqueeze(0)
             F = Jc.new_zeros(Jc.size(1), Jc.size(1)).unsqueeze(0)
-            x = self.lcp_solver()(M, h, Jc, v, Je, b, F)
+            solve = self.lcp_solver()
+            x = solve.apply(M, h, Jc, v, Je, b, F)
         dp = -x[:M.size(0)]
         return dp

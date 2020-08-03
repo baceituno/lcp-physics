@@ -45,6 +45,7 @@ class World:
 		self.tol = tol
 		self.fric_dirs = fric_dirs
 		self.post_stab = post_stab
+		self.gamma = 0.0001
 
 		self.bodies = bodies
 		self.vec_len = len(self.bodies[0].v)
@@ -189,7 +190,7 @@ class World:
 				g2.no_contact = b2.no_contact
 				g2.body_ref = b2
 				g2.body = j
-				self.contact_callback([self], g1, g2)
+				self.contact_callback([self], g1, g2, self.gamma)
 
 	def restitutions(self):
 		restitutions = self._M.new_empty(len(self.contacts))

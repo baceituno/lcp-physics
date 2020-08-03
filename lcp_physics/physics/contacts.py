@@ -22,7 +22,7 @@ class ContactHandler:
 
 
 class OdeContactHandler(ContactHandler):
-    def __call__(self, args, geom1, geom2):
+    def __call__(self, args, geom1, geom2, gamma = 0):
         raise NotImplementedError
         # if geom1 in geom2.no_contact:
         #     return
@@ -56,7 +56,7 @@ class DiffContactHandler(ContactHandler):
     def __init__(self):
         self.debug_callback = OdeContactHandler()
 
-    def __call__(self, args, geom1, geom2):
+    def __call__(self, args, geom1, geom2, gamma = 1):
         # self.debug_callback(args, geom1, geom2)
 
         if geom1.body_ref in geom2.no_contact:
@@ -223,7 +223,8 @@ class DiffContactHandler(ContactHandler):
             eps = torch.tensor(1e-6)
 
             # contact[0] = (normal, pt1, pt2, penetration_dist)
-            contact[0][0] = contact[0][0] # * torch.sigmoid(0.01*contact[0][3] + delta) * torch.sigmoid(-2*contact[0][3] + delta) + eps
+            print('MESSAGE !!! ')
+            contact[0][0] = contact[0][0] # * torch.sigmoid(gamma*contact[0][3] + delta) * torch.sigmoid(-gamma*contact[0][3] + delta) + eps
             # print(contact[0][3])
 
         world.contacts_debug = world.contacts  # XXX

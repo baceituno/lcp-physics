@@ -1,26 +1,19 @@
 import torch
-from torch.autograd import Function
-
 from .solvers import pdipm
+import numpy as np
 from .util import bger, extract_batch_size
 
-
-class LCPFunction(Function):
+class LCPFunction(torch.autograd.Function):
     """A differentiable LCP solver, uses the primal dual interior point method
        implemented in pdipm.
     """
     # @staticmethod
-    def __init__(self, eps=1e-12, verbose=-1, not_improved_lim=3,
-                 max_iter=10):
+    def __init__(self):
         super().__init__()
-        self.eps = eps
-        self.verbose = verbose
-        self.not_improved_lim = not_improved_lim
-        self.max_iter = max_iter
         self.Q_LU = self.S_LU = self.R = None
 
     # @profile
-    # @staticmethod
+    @staticmethod
     def forward(self, Q, p, G, h, A, b, F):
         _, nineq, nz = G.size()
         neq = A.size(1) if A.ndimension() > 1 else 0
@@ -30,21 +23,23 @@ class LCPFunction(Function):
         self.Q_LU, self.S_LU, self.R = pdipm.pre_factor_kkt(Q, G, F, A)
         zhats, self.nus, self.lams, self.slacks = pdipm.forward(
             Q, p, G, h, A, b, F, self.Q_LU, self.S_LU, self.R,
-            eps=self.eps, max_iter=self.max_iter, verbose=self.verbose,
-            not_improved_lim=self.not_improved_lim)
+            eps=1e-12, max_iter=100, verbose=-1,
+            not_improved_lim=3)
 
         self.save_for_backward(zhats, Q, p, G, h, A, b, F)
         return zhats
 
-    # @staticmethod
+    @staticmethod
     def backward(self, dl_dzhat):
+
+        # print(dl_dzhat)
         zhats, Q, p, G, h, A, b, F = self.saved_tensors
         batch_size = extract_batch_size(Q, p, G, h, A, b)
 
         neq, nineq, nz = self.neq, self.nineq, self.nz
 
         # D = torch.diag((self.lams / self.slacks).squeeze(0)).unsqueeze(0)
-        d = self.lams / self.slacks
+        d = self.lams / (self.slacks + 1e-30)
 
         pdipm.factor_kkt(self.S_LU, self.R, d)
         dx, _, dlam, dnu = pdipm.solve_kkt(self.Q_LU, d, G, A, self.S_LU,
@@ -64,9 +59,16 @@ class LCPFunction(Function):
         dQs = 0.5 * (bger(dx, zhats) + bger(zhats, dx))
 
         grads = (dQs, dps, dGs, dhs, dAs, dbs, dFs)
+
+        if np.isnan(grads[0].sum()).item() > 0:
+            import pdb
+            pdb.set_trace()
+
+        # print(grads)
+
         return grads
 
-    # @staticmethod
+    @staticmethod
     def numerical_backward(self, dl_dzhat):
         # XXX experimental
         # adapted from pytorch's grad check
