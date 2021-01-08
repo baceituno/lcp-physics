@@ -47,6 +47,27 @@ class ExternalForce:
         # match body's tensor type and device
         self.multiplier = get_tensor(self.multiplier, base_tensor=body._base_tensor)
 
+class ExternalForce:
+    """Generic external force to be added to objects.
+       Takes in a force_function which returns a force vector as a function of time,
+       and a multiplier that multiplies such vector.
+    """
+    # Pre-store basic forces
+    DOWN = get_tensor([0, 0, 1])
+    RIGHT = get_tensor([0, 1, 0])
+    ROT = get_tensor([1, 0, 0])
+    ZEROS = get_tensor([0, 0, 0])
+
+    def __init__(self, force_func=down_force, multiplier=100.):
+        self.multiplier = multiplier
+        self.force = lambda t: force_func(t) * self.multiplier
+        self.body = None
+
+    def set_body(self, body):
+        self.body = body
+        # match body's tensor type and device
+        self.multiplier = get_tensor(self.multiplier, base_tensor=body._base_tensor)
+
 
 class Gravity(ExternalForce):
     """Gravity force object, constantly returns a downwards pointing force of
@@ -80,7 +101,7 @@ class MDP(ExternalForce):
     def force(self, t):
         agains_vel_tensor = 2*torch.nn.Sigmoid()(self.body.v) - 1
         self.cached_force = -agains_vel_tensor * self.body.mass * self.multiplier
-        self.cached_force[0] = self.cached_force[0]*100
+        self.cached_force[0] = self.cached_force[0]*1000
         return self.cached_force
 
     def set_body(self, body):
@@ -97,17 +118,19 @@ class FingerTrajectory(ExternalForce):
         self.Traj = traj
         self.multiplier = 1
         self.body = None
-        self.t_prev = 0
+        self.t_prev = 0 
         self.idx = 0
         self.cached_force = None
+        print(self.Traj)
 
     def force(self, t):
-        if t - self.t_prev > 0.1:
-            self.t_prev = t
-            self.idx += 1
-            self.cached_force = self.Traj[:,self.idx] * self.body.mass
-        else:
-            self.cached_force = self.Traj[:,self.idx] * self.body.mass
+        # if t - self.t_prev > 0.1:
+        import math
+        self.idx = int(math.floor(t*10))
+        if self.idx > 4:
+            self.idx = 4
+        self.cached_force = self.Traj[:,self.idx] * self.body.mass * 3
+        # print(self.cached_force)
         return self.cached_force
 
     def set_body(self, body):

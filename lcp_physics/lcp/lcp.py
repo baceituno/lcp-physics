@@ -23,7 +23,7 @@ class LCPFunction(torch.autograd.Function):
         self.Q_LU, self.S_LU, self.R = pdipm.pre_factor_kkt(Q, G, F, A)
         zhats, self.nus, self.lams, self.slacks = pdipm.forward(
             Q, p, G, h, A, b, F, self.Q_LU, self.S_LU, self.R,
-            eps=1e-12, max_iter=100, verbose=-1,
+            eps=1e-18, max_iter=10, verbose=-1,
             not_improved_lim=3)
 
         self.save_for_backward(zhats, Q, p, G, h, A, b, F)
@@ -64,7 +64,9 @@ class LCPFunction(torch.autograd.Function):
             import pdb
             pdb.set_trace()
 
+        # print('\n\n\na\n\n')
         # print(grads)
+        # print('\n\n\nb\n\n')
 
         return grads
 
@@ -73,6 +75,10 @@ class LCPFunction(torch.autograd.Function):
         # XXX experimental
         # adapted from pytorch's grad check
         # from torch.autograd.gradcheck import get_numerical_jacobian
+
+
+        print('dl_dzhat')
+
         from torch.autograd import Variable
         from collections import Iterable
 

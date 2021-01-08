@@ -134,10 +134,10 @@ def forward(Q, p, G, h, A, b, F, Q_LU, S_LU, R,
             return best['x'], best['y'], best['z'], best['s']
 
         if np.isnan(rs.sum()).item() > 0:
-            print('\n\n1')
-            print(rs)
-            import pdb
-            pdb.set_trace()
+            # print(rs)
+            rs = rs*0
+            # import pdb
+            # pdb.set_trace()
         dx_aff, ds_aff, dz_aff, dy_aff = solve_kkt(
             Q_LU, d, G, A, S_LU, rx, rs, rz, ry)
 
@@ -248,10 +248,13 @@ def solve_kkt(Q_LU, d, G, A, S_LU, rx, rs, rz, ry):
     w = -(h.T.lu_solve(*S_LU).view(1, -1))  # S-1 h =
 
     if np.isnan(w.sum()).item() > 0 or np.isnan(h.sum()).item() > 0:
-            import pdb
-            print(h)
-            print(w)
-            pdb.set_trace()
+            # import pdb
+            # print(h)
+            # print(w)
+            # pdb.set_trace()
+
+            h = h*0
+            w = w*0
 
     g1 = -rx - w[:, neq:].unsqueeze(1).bmm(G).squeeze(1)  # -rx - GT w = -rx -GT S-1 h
     if neq > 0:

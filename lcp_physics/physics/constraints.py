@@ -65,7 +65,7 @@ class FixedJoint:
         self.rot1 = self.pos.new_tensor(0)
         self.rot2 = None
         self.pos2 = self.pos - self.body2.pos
-        self.rot2 = self.body2.p[0] - self.body1.p[0]  # inverted sign?
+        self.rot2 = self.body1.p[0] - self.body2.p[0]  # inverted sign?
 
     def J(self):
         J1 = torch.cat([torch.cat([-self.pos1[Y:Y+1], self.pos1[X:X+1]]).unsqueeze(1),
@@ -78,6 +78,12 @@ class FixedJoint:
 
     def move(self, dt):
         self.update_pos()
+
+    def stabilize(self):
+        pass
+        # self.body1.set_p(torch.cat([self.body1.p[0:1],self.pos.view(2)]))
+        # if self.body2 is not None:
+        #     self.body2.set_p(torch.cat([self.body2.p[0:1],self.pos2.view(2)+self.body2.pos]))
 
     def update_pos(self):
         self.pos = self.body1.pos
@@ -198,6 +204,9 @@ class TotalConstraint:
     def update_pos(self):
         self.pos1 = polar_to_cart(self.r1, self.rot1)
         self.pos = self.body1.pos + self.pos1
+
+    def stabilize(self):
+        pass
 
     def draw(self, screen, pixels_per_meter=1):
         pos = (self.pos.detach().numpy() * pixels_per_meter).astype(int)

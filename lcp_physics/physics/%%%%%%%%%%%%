@@ -1,0 +1,30 @@
+%%%%%%%%%%%%
+%  delta   %
+%%%%%%%%%%%%
+
+ReducedBaseOffline
+mu = [0.4, 0.6, 0.8, 1.2, 0.1];
+[u, T0] = ReducedBaseOnline(mu, 10, ANq, FN);
+
+T0
+
+ReducedBaseOffline
+mu = [1.8, 4.2, 5.7, 2.9, 0.3];
+[u, T1] = ReducedBaseOnline(mu, 10, ANq, FN);
+
+T1
+
+%%%%%%%%%%%%
+% epsilon  %
+%%%%%%%%%%%%
+
+Bi_rnge = 0.1:10;
+C = [];
+
+for bi = 0.1:10
+	mu = [0.4, 0.6, 0.8, 1.2, bi];
+	[u, Ti] = ReducedBaseOnline(mu, 10, ANq, FN);
+	C = [C, 0.2*bi + Ti];
+end
+
+plot(Bi_rnge, C)

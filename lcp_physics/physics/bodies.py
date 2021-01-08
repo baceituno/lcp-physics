@@ -4,6 +4,7 @@ import ode
 import pygame
 
 import torch
+import numpy as np
 
 from .utils import Indices, Defaults, get_tensor, cross_2d, rotation_matrix
 
@@ -53,6 +54,7 @@ class Body(object):
 
         self.col = col
         self.thickness = thickness
+        self.name = 'NameNo'
 
         self._create_geom()
         self.no_contact = set()
@@ -102,7 +104,12 @@ class Body(object):
         if len(self.forces) == 0:
             return self.v.new_zeros(len(self.v))
         else:
-            return sum([f.force(t) for f in self.forces])
+            if np.isnan(sum([f.force(t) for f in self.forces])).sum().item() > 0:
+                f = sum([f.force(t) for f in self.forces])
+                f[:] = 0
+                return f
+            else:
+                return sum([f.force(t) for f in self.forces])
 
     def add_no_contact(self, other):
         # self.geom.no_contact.add(other.geom)
@@ -146,7 +153,7 @@ class Circle(Body):
 
     def draw(self, screen, pixels_per_meter=1):
         center = (self.pos.detach().numpy() * pixels_per_meter).astype(int)
-        rad = int(10 * pixels_per_meter)
+        rad = int(self.rad * pixels_per_meter)
         # draw radius to visualize orientation
         r = pygame.draw.line(screen, (0, 0, 255), center,
                              center + [math.cos(self.rot.item()) * rad,
@@ -154,7 +161,7 @@ class Circle(Body):
                              self.thickness)
         # draw circle
         c = pygame.draw.circle(screen, self.col, center,
-                               rad, self.thickness)
+                               10, self.thickness)
         return [c, r]
 
 
@@ -262,7 +269,7 @@ class Hull(Body):
 class Rect(Hull):
     def __init__(self, pos, dims, vel=(0, 0, 0), mass=1, restitution=Defaults.RESTITUTION,
                  fric_coeff=Defaults.FRIC_COEFF, eps=Defaults.EPSILON,
-                 col=(255, 0, 0), thickness=1, name=None, traj = None):
+                 col=(255, 0, 0), thickness=1, name="env", traj = None):
         self.name = name
         self._set_base_tensor(locals().values())
         self.dims = get_tensor(dims, base_tensor=self._base_tensor)
@@ -310,3 +317,105 @@ class Rect(Hull):
         p = super().draw(screen, pixels_per_meter=pixels_per_meter,
                          draw_center=False)
         return [l1, l2] + p
+
+
+class NonConvex(Body):
+    """Body's position will not necessarily match reference point.
+       Reference point is used as a world frame reference for setting the position
+       of vertices, which maintain the world frame position that was passed in.
+       After vertices are positioned in world frame using reference point, centroid
+       of hull is calculated and the vertices' representation is adjusted to the
+       centroid's frame. Object position is set to centroid.
+    """
+    def __init__(self, ref_point, vertices, vel=(0, 0, 0), mass=1, restitution=Defaults.RESTITUTION,
+                 fric_coeff=Defaults.FRIC_COEFF, eps=Defaults.EPSILON,
+                 col=(255, 0, 0), thickness=1, name = None, traj = None):
+        self.name = name
+        self._set_base_tensor(locals().values())
+        ref_point = get_tensor(ref_point, base_tensor=self._base_tensor)
+        # center vertices around centroid
+        verts = [get_tensor(v, base_tensor=self._base_tensor) for v in vertices]
+        assert len(verts) > 2 and self._is_clockwise(verts)
+        centroid = self._get_centroid(verts)
+        self.verts = [v for v in verts]
+        # center position at centroid
+        pos = ref_point
+        # store last separating edge for SAT
+        self.last_sat_idx = 0
+        super().__init__(pos, vel=vel, mass=mass, restitution=restitution,
+                         fric_coeff=fric_coeff, eps=eps, col=col, thickness=thickness)
+
+    def _get_ang_inertia(self, mass):
+        numerator = 0
+        denominator = 0
+        for i in range(len(self.verts)):
+            v1 = self.verts[i]
+            v2 = self.verts[(i+1) % len(self.verts)]
+            norm_cross = torch.norm(cross_2d(v2, v1))
+            numerator = numerator + norm_cross * \
+                (torch.dot(v1, v1) + torch.dot(v1, v2) + torch.dot(v2, v2))
+            denominator = denominator + norm_cross
+        return 1 / 6 * mass * numerator / denominator
+
+    def _create_geom(self):
+        # # find vertex furthest from centroid
+        # max_rad = max([v.dot(v).item() for v in self.verts])
+        # max_rad = math.sqrt(max_rad)
+
+        # # XXX Using sphere with largest vertex ray for broadphase for now
+        # self.geom = ode.GeomSphere(None, max_rad + self.eps.item())
+        # self.geom.setPosition(torch.cat([self.pos,
+        #                                  self.pos.new_zeros(1)]))
+        # self.geom.no_contact = set()
+        pass
+
+    def set_p(self, new_p, update_geom_rotation=False):
+        rot = new_p[0] - self.p[0]
+        if rot.item() != 0:
+            self.rotate_verts(rot)
+        super().set_p(new_p, update_geom_rotation=update_geom_rotation)
+
+    def move(self, dt, update_geom_rotation=False):
+        super().move(dt, update_geom_rotation=update_geom_rotation)
+
+    def rotate_verts(self, rot):
+        rot_mat = rotation_matrix(rot)
+        for i in range(len(self.verts)):
+            self.verts[i] = rot_mat.matmul(self.verts[i])
+
+    @staticmethod
+    def _get_centroid(verts):
+        numerator = 0
+        denominator = 0
+        for i in range(len(verts)):
+            v1 = verts[i]
+            v2 = verts[(i + 1) % len(verts)]
+            cross = cross_2d(v2, v1)
+            numerator = numerator + cross * (v1 + v2)
+            denominator = denominator + cross / 2
+        return 1 / 6 * numerator / denominator
+
+    @staticmethod
+    def _is_clockwise(verts):
+        total = 0
+        for i in range(len(verts)):
+            v1 = verts[i]
+            v2 = verts[(i+1) % len(verts)]
+            total = total + ((v2[X] - v1[X]) * (v2[Y] + v1[Y])).item()
+        return total < 0
+
+    def draw(self, screen, draw_center=True, pixels_per_meter=1):
+        # vertices in global frame
+        pts = [(v + self.pos).detach().cpu().numpy() * pixels_per_meter
+               for v in self.verts]
+
+        # draw hull
+        p = pygame.draw.polygon(screen, self.col, pts, self.thickness)
+        # draw center
+        if draw_center:
+            c_pos = (self.pos.data.numpy() * pixels_per_meter).astype(int)
+            c = pygame.draw.circle(screen, (0, 0, 255), c_pos, 2)
+            return [p, c]
+        else:
+            return [p]
+
